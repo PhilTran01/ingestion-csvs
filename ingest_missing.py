@@ -21,6 +21,7 @@ Options:
 import sys
 import os
 import time
+import pickle
 import logging
 import glob
 import errno
@@ -146,28 +147,64 @@ def playback(refdes, event_url, particle_url, missing_dates):
                     signal.alarm(0)
 
 
+class PreviousIngests:
+    def __init__(self):
+        self.previous_ingests = {}
+
+    def load_previous_ingests(self):
+        pickle.load(open("previous_ingest.pickle", "rb"))
+
+    def write_previous_ingests(self, previous_ingests):
+        pickle.dump(previous_ingests, open("previous_ingests.pickle", "wb"))
+
+    def is_in_previous_ingests(self, refdes, missing_date):
+        # It is possible that the reference designator may not be in previous ingests
+        try:
+            if missing_date in self.previous_ingests[refdes]:
+                return True
+            else:
+                self.previous_ingests[refdes].append(missing_date)
+                return False
+
+        # Reference designator is not a key in previous_ingests, so still return false
+        except KeyError:
+            self.previous_ingests[refdes].append(missing_date)
+            return False
+
+
+
 def main():
     arg = docopt(__doc__)
     logging.getLogger().setLevel(logging.INFO)
     
     if arg['<event_url>'] and arg['<particle_url>'] and arg['<server>']:
+
+        previous_ingests = {}
+
+        if os.path.isfile('previous_ingest.pickle'):
+            previous_ingests = load_previous_ingests()
+
         Cabled.cabled_drivers_raw = request_cabled_raw()
         event_url = arg['<event_url>']
         particle_url = arg['<particle_url>']
         server = arg['<server>']
         refdes_list = list_missing_dates.get_refdes_list(server)
         missing_data_dict = {}
-        
+
+        # Acquire a list of missing dates from the availability tool.
         for refdes in refdes_list:
             if is_cabled(refdes):
                 missing_data_list = list_missing_dates.get_missing_data_list(refdes, server) # returns tuple
                 if missing_data_list:
                     missing_data_dict[refdes] = missing_data_list
-        
+
+        # Check for dates previously ingested by this tool and ingest ones that have not been ingested.
         for refdes, missing_dates in missing_data_dict.iteritems():
-            for begin, end in missing_dates:
-                dates = date_list(begin, end)
-                playback(refdes, event_url, particle_url, dates)
+            for missing_date in missing_dates:
+                if not is_in_previous_ingests(previous_ingests, refdes, missing_date):
+                    begin, end = missing_date
+                    dates = date_list(begin, end)
+                    playback(refdes, event_url, particle_url, dates)
 
 
 if __name__ == "__main__":
